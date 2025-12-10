@@ -4,12 +4,11 @@ import pandas as pd
 import time
 import os
 import json
-import random
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 
 # --- 1. KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Monitor Link Pro", page_icon="🌐", layout="wide")
+st.set_page_config(page_title="Monitor Link 24H", page_icon="🌐", layout="wide")
 
 FILE_DATA = "data_monitoring.json"
 FILE_STATUS = "status_info.json" 
@@ -59,62 +58,32 @@ def baca_status_system():
     except:
         return {"status_mesin": "UNKNOWN", "next_run": 0, "last_heartbeat": 0}
 
-def format_proxy_url(proxy_str):
-    if not proxy_str: return None
-    try:
-        proxy_str = proxy_str.strip()
-        if not proxy_str.startswith("http"):
-            proxy_str = "http://" + proxy_str
-        if "@" in proxy_str:
-            protocol_split = proxy_str.split("://")
-            base = protocol_split[1] if len(protocol_split) > 1 else protocol_split[0]
-            auth_part, ip_part = base.split("@")
-            if ":" in auth_part:
-                user, password = auth_part.split(":", 1)
-                password_safe = quote_plus(password)
-                final_url = f"http://{user}:{password_safe}@{ip_part}"
-                return {"http": final_url, "https": final_url}
-        return {"http": proxy_str, "https": proxy_str}
-    except:
-        return {"http": proxy_str, "https": proxy_str}
-
 # --- 3. LOGIKA UTAMA ---
 query_params = st.query_params
 mode = query_params.get("mode")
 
-# Hardcode Proxy di sini agar Robot bisa baca (Ganti dengan Proxy Anda yang benar)
-# Contoh: "http://user:pass@ip:port"
+# Hardcode Proxy (Isi jika pakai Webshare)
+# Format: {"http": "http://user:pass@ip:port", "https": "http://user:pass@ip:port"}
 PROXY_SERVER = None 
-# Jika ingin pakai proxy untuk robot, isi di bawah ini:
-# PROXY_SERVER = format_proxy_url("http://karnasenkar:passwordanda@1.2.3.4:8080")
 
 # ==========================================
-# MODE ROBOT (AUTO TRIGGER)
+# MODE 1: ROBOT (AUTO TRIGGER via CRON-JOB)
 # ==========================================
 if mode == "robot_trigger":
-    st.title("🤖 Robot Worker Active")
-    st.write("Sedang menjalankan pengecekan otomatis...")
+    st.write("🤖 Robot sedang bekerja...")
     
     simpan_status_system("WORKING", None)
     
     data_proc = baca_db()
-    total = len(data_proc)
     
-    # Progress bar text
-    progress_text = st.empty()
-    bar = st.progress(0)
-
     for i, item in enumerate(data_proc):
         url = item['url']
-        progress_text.text(f"Cek: {url}")
-        
         stat = "DOWN"
         code = "ERR"
         lat = 0
         
         for attempt in range(3):
             try:
-                # Robot pakai timeout 20s
                 r = requests.get(url, headers=HEADERS, proxies=PROXY_SERVER, timeout=20)
                 lat = round(r.elapsed.total_seconds() * 1000)
                 if r.status_code == 200:
@@ -126,8 +95,6 @@ if mode == "robot_trigger":
                 code = r.status_code
                 break 
             except Exception:
-                stat = "DOWN"
-                code = "ERR"
                 time.sleep(1)
         
         data_proc[i]['status'] = stat
@@ -136,83 +103,109 @@ if mode == "robot_trigger":
         data_proc[i]['last_check'] = get_wib_str()
         
         simpan_db(data_proc)
-        bar.progress((i + 1) / total)
-        
-        # Simpan heartbeat agar penonton tahu sistem hidup
+        # Heartbeat agar sistem dianggap hidup
         simpan_status_system("WORKING", None)
 
-    # Setelah selesai, set status WAITING + 10 Menit ke depan
-    next_run = datetime.utcnow().timestamp() + 600 # 600 detik = 10 menit
+    # Set jadwal berikutnya (+10 menit)
+    next_run = datetime.utcnow().timestamp() + 600 
     simpan_status_system("WAITING", next_run)
     
-    st.success(f"✅ Robot Selesai pada {get_wib_str()}")
-    st.stop() # Berhenti di sini, jangan load tampilan lain
+    st.success(f"✅ Selesai: {get_wib_str()}")
+    st.stop()
 
 # ==========================================
-# MODE ADMIN (MANUAL)
+# MODE 2 & 3: ADMIN & PENONTON (VISUALISASI)
 # ==========================================
-elif mode == "admin":
-    # (Kode Admin Sidebar seperti biasa - dipersingkat untuk fokus)
+
+# -- Sidebar Admin (Hanya muncul jika mode=admin) --
+if mode == "admin":
     st.sidebar.header("🔧 Panel Admin")
+    st.sidebar.info("Dashboard ini berjalan otomatis 24 Jam via Cron-job.")
     
-    # Input Link
     current_data = init_db()
     current_urls = "\n".join([item.get('url', '') for item in current_data])
-    new_urls = st.sidebar.text_area("Edit Link:", value=current_urls)
-    if st.sidebar.button("Simpan"):
-        # Logika simpan sederhana
+    new_urls = st.sidebar.text_area("Edit Daftar Link:", value=current_urls, height=300)
+    
+    if st.sidebar.button("Simpan Perubahan"):
         u_list = [u.strip() for u in new_urls.split('\n') if u.strip()]
         n_data = []
         for u in u_list:
             if not u.startswith("http"): u = "https://" + u
-            n_data.append({"url": u, "status": "PENDING", "code": "-", "latency": 0, "last_check": "-"})
+            # Pertahankan data lama jika ada (agar tidak merah semua saat save)
+            old_item = next((item for item in current_data if item.get('url') == u), None)
+            if old_item:
+                n_data.append(old_item)
+            else:
+                n_data.append({"url": u, "status": "PENDING", "code": "-", "latency": 0, "last_check": "-"})
         simpan_db(n_data)
+        st.toast("Daftar link berhasil disimpan!")
+        time.sleep(1)
         st.rerun()
 
-    st.sidebar.info("Untuk Otomatis 24 Jam: Gunakan cron-job.org untuk menembak link '?mode=robot_trigger'")
-    st.title("🔧 Halaman Admin")
-    st.write("Gunakan menu sidebar untuk mengedit link.")
-    st.write("Untuk melihat hasil, buka mode penonton (hapus ?mode=admin).")
+# -- Tampilan Utama (Admin & Penonton melihat ini) --
+st.title("🌐 Dashboard Monitoring 24 Jam")
 
-# ==========================================
-# MODE PENONTON (VIEWER)
-# ==========================================
+# Indikator Status Sistem
+sys_info = baca_status_system()
+status_mesin = sys_info.get("status_mesin", "UNKNOWN")
+next_run_ts = sys_info.get("next_run", 0)
+last_heartbeat = sys_info.get("last_heartbeat", 0)
+sekarang_ts = datetime.utcnow().timestamp()
+
+# Logika Offline (Jika Robot mati lebih dari 12 menit)
+if (sekarang_ts - last_heartbeat) > 720: 
+    st.error("🔴 **SYSTEM OFFLINE:** Robot pengecek tidak aktif. Pastikan Cron-job berjalan.")
+elif status_mesin == "WORKING":
+    st.info("🔄 **Robot Sedang Bekerja:** Melakukan update data...")
 else:
-    st.title("🌐 Dashboard Monitoring Link Pro")
-    
-    # Indikator Status
-    sys_info = baca_status_system()
-    status_mesin = sys_info.get("status_mesin", "UNKNOWN")
-    next_run_ts = sys_info.get("next_run", 0)
-    last_heartbeat = sys_info.get("last_heartbeat", 0)
-    sekarang_ts = datetime.utcnow().timestamp()
-    
-    # Logika Offline: Jika heartbeat terakhir lebih tua dari 12 menit (10 menit interval + 2 menit toleransi)
-    if (sekarang_ts - last_heartbeat) > 720: 
-        st.error("🔴 **SYSTEM OFFLINE:** Robot pengecek mati. Silakan aktifkan cron-job.")
-    elif status_mesin == "WORKING":
-        st.info("🔄 **Sedang Mengecek:** Robot sedang bekerja...")
+    sisa = int(next_run_ts - sekarang_ts)
+    if sisa > 0:
+        m = sisa // 60
+        s = sisa % 60
+        st.warning(f"⏳ **Online:** Update berikutnya dalam {m}m {s}s")
     else:
-        sisa = int(next_run_ts - sekarang_ts)
-        if sisa > 0:
-            m = sisa // 60
-            s = sisa % 60
-            st.warning(f"⏳ **Online:** Update berikutnya dalam {m}m {s}s")
-        else:
-            st.success("✅ Menunggu Robot bekerja...")
-            
-    # Tampilkan Tabel
-    df = pd.DataFrame(baca_db())
+        st.success("✅ Menunggu Robot bekerja...")
+
+# Tabel Data
+df = pd.DataFrame(baca_db())
+
+tab1, tab2 = st.tabs(["📊 Live Data", "📈 Statistik"])
+
+with tab1:
     if not df.empty:
         if 'status' not in df.columns: df['status'] = "PENDING"
         
+        # Metrik Ringkas
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Link", len(df))
+        c2.metric("Aman", len(df[df['status'] == 'AMAN']))
+        c3.metric("Kendala", len(df[df['status'] != 'AMAN']), delta_color="inverse")
+
         def warnai(val):
             s = str(val)
             if s == 'AMAN': return 'color: #4CAF50; font-weight: bold'
             if 'PENDING' in s: return 'color: gray'
             return 'color: #FF0000; font-weight: bold'
 
-        st.dataframe(df.style.map(warnai, subset=['status']), use_container_width=True, height=600)
-    
-    time.sleep(1)
-    st.rerun()
+        st.dataframe(
+            df.style.map(warnai, subset=['status']),
+            use_container_width=True,
+            column_config={
+                "url": "Link Website",
+                "status": "Status",
+                "code": "Kode",
+                "latency": "Latency (ms)",
+                "last_check": "Waktu Cek (WIB)"
+            },
+            height=600
+        )
+    else:
+        st.info("Belum ada link. Masuk ke mode admin untuk menambahkan.")
+
+with tab2:
+    if not df.empty:
+        st.bar_chart(df['status'].value_counts())
+
+# Auto Refresh Tampilan setiap 5 detik (Agar hitung mundur jalan)
+time.sleep(5)
+st.rerun()
