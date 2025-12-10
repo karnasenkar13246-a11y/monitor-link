@@ -8,7 +8,7 @@ import random
 from datetime import datetime, timedelta
 
 # --- 1. KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Live Monitor WIB", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Monitor Link WIB", page_icon="⚡", layout="wide")
 
 # File Penyimpanan
 FILE_DATA = "data_monitoring.json"
@@ -18,11 +18,15 @@ HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
-# --- 2. FUNGSI DATABASE & WAKTU ---
-def get_wib_time():
-    # Mengambil waktu UTC dan menambah 7 jam untuk WIB
+# --- 2. FUNGSI DATABASE & WAKTU WIB ---
+def get_wib_now():
+    # Mengambil waktu UTC dan menambah 7 jam (WIB)
     wib_time = datetime.utcnow() + timedelta(hours=7)
-    return wib_time.strftime("%H:%M:%S")
+    return wib_time
+
+def get_wib_str():
+    # Format string jam:menit:detik
+    return get_wib_now().strftime("%H:%M:%S")
 
 def init_db():
     if not os.path.exists(FILE_DATA):
@@ -74,14 +78,16 @@ if is_admin:
     
     st.sidebar.divider()
     
-    # Pengaturan Loop
-    st.sidebar.subheader("⚙️ Kontrol Pengecekan")
-    auto_loop = st.sidebar.checkbox("🔄 JALANKAN PENGECEKAN (Real-time)", value=False)
+    # Pengaturan Waktu (Default 10 Menit)
+    st.sidebar.subheader("⏱️ Pengaturan Interval")
+    interval_menit = st.sidebar.number_input("Jeda Pengecekan (Menit):", min_value=1, value=10)
+    interval_detik = interval_menit * 60
     
-    if auto_loop:
-        st.sidebar.warning("⚠️ Sistem berjalan terus-menerus tanpa henti.")
-    else:
-        st.sidebar.info("Centang kotak di atas untuk memulai.")
+    auto_loop = st.sidebar.checkbox("🔄 JALANKAN PENGECEKAN", value=False)
+    
+    # Menampilkan Jam Server saat ini (WIB)
+    st.sidebar.markdown("---")
+    st.sidebar.caption(f"🕒 Jam Server: {get_wib_str()} WIB")
 
 # --- 4. TAMPILAN UTAMA (TABS MENU) ---
 st.title("⚡ Dashboard Monitoring Real-Time (WIB)")
@@ -109,14 +115,14 @@ with tab1:
             c4.info("👨‍💻 ADMIN MODE")
         else:
             c4.success("👀 VIEW MODE")
-            st.caption(f"🕒 Waktu Server: {get_wib_time()} WIB")
+            c4.caption(f"Update Terakhir: {get_wib_str()} WIB")
 
         # Styling Tabel
         def warnai_row(val):
             s = str(val)
             if s == 'AMAN': return 'color: #4CAF50; font-weight: bold' # Hijau
             if 'PENDING' in s: return 'color: gray'
-            return 'color: #FF0000; font-weight: bold' # Merah untuk sisanya
+            return 'color: #FF0000; font-weight: bold' # Merah
 
         st.dataframe(
             df.style.map(warnai_row, subset=['status']),
@@ -158,25 +164,27 @@ with tab3:
 
 # --- 5. LOGIKA REFRESH VIEWER ---
 if not is_admin:
-    # Penonton refresh cepat (3 detik) agar terasa real-time
-    time.sleep(3) 
+    time.sleep(5) # Refresh otomatis untuk penonton
     st.rerun()
 
-# --- 6. LOGIKA BACKGROUND PROCESS (ADMIN ONLY - REALTIME LOOP) ---
+# --- 6. LOGIKA BACKGROUND PROCESS (ADMIN ONLY) ---
 if is_admin and auto_loop:
     status_placeholder = st.empty()
+    countdown_placeholder = st.empty()
     bar = st.progress(0)
+    
+    # Catat waktu mulai (untuk perhitungan 10 menit)
+    batch_start_time = time.time()
     
     data_proc = baca_db()
     total = len(data_proc)
     
-    # --- LOOP PENGECEKAN ---
+    # --- LOOP PENGECEKAN LINK ---
     for i, item in enumerate(data_proc):
         url = item['url']
-        status_placeholder.info(f"🔍 [{i+1}/{total}] Mengecek: {url}...")
+        status_placeholder.info(f"🔍 [Proses {i+1}/{total}] Mengecek: {url}...")
         
         try:
-            # Request timeout 5 detik
             r = requests.get(url, headers=HEADERS, timeout=5)
             lat = round(r.elapsed.total_seconds() * 1000)
             
@@ -192,23 +200,37 @@ if is_admin and auto_loop:
             code = "ERR"
             lat = 0
             
-        # Simpan Data dengan Waktu WIB
+        # Update Data dengan Waktu WIB
         data_proc[i]['status'] = stat
         data_proc[i]['code'] = str(code)
         data_proc[i]['latency'] = lat
-        data_proc[i]['last_check'] = get_wib_time() # <--- Menggunakan fungsi WIB
+        data_proc[i]['last_check'] = get_wib_str() # Pakai Jam WIB
         
         simpan_db(data_proc)
         
-        # Jeda "napas" singkat 1 detik agar tidak dianggap spammer brutal
-        # Tapi ini akan terasa continue (real-time loop)
+        # Jeda "sopan" 1 detik
         time.sleep(1) 
-        
         bar.progress((i + 1) / total)
         
     bar.empty()
-    status_placeholder.success("✅ Satu putaran selesai! Mengulang seketika...")
+    status_placeholder.success(f"✅ Pengecekan selesai pada pukul {get_wib_str()} WIB.")
     
-    # Hapus jeda panjang. Langsung restart.
-    time.sleep(1) 
-    st.rerun()
+    # --- LOGIKA TUNGGU SISA WAKTU (INTERVAL 10 MENIT) ---
+    durasi_kerja = time.time() - batch_start_time
+    sisa_waktu = interval_detik - durasi_kerja
+    
+    if sisa_waktu > 0:
+        # Loop countdown sampai sisa waktu habis
+        for s in range(int(sisa_waktu), 0, -1):
+            menit = s // 60
+            detik = s % 60
+            
+            # Tampilkan jam WIB yang berjalan + Countdown
+            jam_sekarang = get_wib_str()
+            countdown_placeholder.warning(
+                f"🕒 Jam: {jam_sekarang} WIB | ⏳ Menunggu pengecekan berikutnya: {menit}m {detik}s lagi..."
+            )
+            time.sleep(1)
+            
+    countdown_placeholder.empty()
+    st.rerun() # Ulangi proses
