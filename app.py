@@ -6,12 +6,13 @@ import os
 import json
 import random
 from datetime import datetime, timedelta
-from urllib.parse import quote_plus # PENTING: Untuk menangani password bersimbol
+from urllib.parse import quote_plus
 
 # --- 1. KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Monitor Link Pro", page_icon="🌐", layout="wide")
 
 FILE_DATA = "data_monitoring.json"
+FILE_STATUS = "status_info.json" # FILE BARU: Untuk komunikasi waktu ke penonton
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -42,37 +43,40 @@ def simpan_db(data):
     with open(FILE_DATA, "w") as f:
         json.dump(data, f, indent=4)
 
-# --- FUNGSI PENTING: MEMBERSIHKAN FORMAT PROXY ---
+# --- FUNGSI BARU: SIMPAN STATUS SISTEM (WAKTU NEXT RUN) ---
+def simpan_status_system(status, next_run_timestamp=None):
+    info = {
+        "status_mesin": status, # 'WORKING' atau 'WAITING'
+        "next_run": next_run_timestamp # Format Timestamp
+    }
+    with open(FILE_STATUS, "w") as f:
+        json.dump(info, f)
+
+def baca_status_system():
+    try:
+        with open(FILE_STATUS, "r") as f:
+            return json.load(f)
+    except:
+        return {"status_mesin": "UNKNOWN", "next_run": 0}
+
+# --- FUNGSI PROXY FORMATTER ---
 def format_proxy_url(proxy_str):
     if not proxy_str: return None
     try:
         proxy_str = proxy_str.strip()
-        
-        # Tambahkan http jika belum ada
         if not proxy_str.startswith("http"):
             proxy_str = "http://" + proxy_str
-            
-        # Logika khusus: Jika ada password, kita encode passwordnya
         if "@" in proxy_str:
-            # Memisahkan bagian http://
             protocol_split = proxy_str.split("://")
             base = protocol_split[1] if len(protocol_split) > 1 else protocol_split[0]
-            
-            # Memisahkan user:pass dengan ip:port
             auth_part, ip_part = base.split("@")
-            
             if ":" in auth_part:
                 user, password = auth_part.split(":", 1)
-                # INI KUNCINYA: Mengubah simbol '!' menjadi kode aman '%21'
                 password_safe = quote_plus(password)
                 final_url = f"http://{user}:{password_safe}@{ip_part}"
-                
                 return {"http": final_url, "https": final_url}
-        
-        # Jika proxy biasa
         return {"http": proxy_str, "https": proxy_str}
     except:
-        # Jika gagal parsing, kembalikan input mentah
         return {"http": proxy_str, "https": proxy_str}
 
 # --- 3. SIDEBAR ADMIN ---
@@ -108,21 +112,13 @@ if is_admin:
     st.sidebar.divider()
     
     st.sidebar.subheader("🌍 Pengaturan Proxy")
-    # Input Proxy
-    raw_proxy_input = st.sidebar.text_input(
-        "Masukkan Proxy (Webshare):", 
-        placeholder="http://user:pass@ip:port",
-        value=""
-    )
-    
+    raw_proxy_input = st.sidebar.text_input("Masukkan Proxy (Webshare):", placeholder="http://user:pass@ip:port", value="")
     if raw_proxy_input:
-        # Panggil fungsi format otomatis di sini
         proxies = format_proxy_url(raw_proxy_input)
-        st.sidebar.warning("✅ Proxy Aktif (Auto-Formatted)")
+        st.sidebar.warning("✅ Proxy Aktif")
     
     st.sidebar.divider()
     
-    # Loop Control
     st.sidebar.subheader("⏱️ Kontrol")
     interval_menit = st.sidebar.number_input("Jeda (Menit):", min_value=1, value=10)
     interval_detik = interval_menit * 60
@@ -131,8 +127,29 @@ if is_admin:
     st.sidebar.caption(f"Server Time: {get_wib_str()} WIB")
 
 # --- 4. TAMPILAN UTAMA ---
-st.title("🌐 Dashboard Monitoring Link (Smart Proxy)")
+st.title("🌐 Dashboard Monitoring Link Pro")
 
+# LOGIKA TAMPILAN HITUNG MUNDUR UNTUK PENONTON
+if not is_admin:
+    sys_info = baca_status_system()
+    status_mesin = sys_info.get("status_mesin", "UNKNOWN")
+    next_run_ts = sys_info.get("next_run", 0)
+    
+    if status_mesin == "WORKING":
+        st.info("🔄 Sistem sedang melakukan pengecekan data terbaru... Mohon tunggu.")
+    elif status_mesin == "WAITING" and next_run_ts:
+        # Hitung sisa waktu
+        sekarang_ts = datetime.utcnow().timestamp()
+        sisa_detik = int(next_run_ts - sekarang_ts)
+        
+        if sisa_detik > 0:
+            menit = sisa_detik // 60
+            detik = sisa_detik % 60
+            st.warning(f"⏳ Data akan diperbarui otomatis dalam: **{menit} menit {detik} detik**")
+        else:
+            st.success("✅ Memulai proses pembaruan data...")
+
+# Load Data Tabel
 data_display = baca_db()
 df = pd.DataFrame(data_display)
 if 'status' not in df.columns: df['status'] = "PENDING"
@@ -150,10 +167,9 @@ with tab1:
         
         if is_admin:
             c4.info("👨‍💻 ADMIN")
-            if proxies: st.caption("🌍 Proxy Mode")
         else:
             c4.success("👀 VIEWER")
-            c4.caption(f"Update: {get_wib_str()} WIB")
+            c4.caption(f"Last Update: {get_wib_str()} WIB")
 
         def warnai_row(val):
             s = str(val)
@@ -182,14 +198,15 @@ with tab2:
 
 with tab3:
     st.markdown("""
-    **Fitur Baru:**
-    1. **Auto-Fix Password:** Password proxy dengan simbol (!, @, #) kini otomatis diperbaiki.
-    2. **Auto-Retry:** Jika koneksi proxy gagal, sistem mencoba 3x sebelum error.
+    **Fitur Terbaru:**
+    - **Countdown Timer:** Penonton kini bisa melihat waktu hitung mundur menuju refresh berikutnya.
+    - **Proxy Auto-Fix:** Support password proxy dengan simbol.
     """)
 
 # --- 5. LOGIKA REFRESH VIEWER ---
 if not is_admin:
-    time.sleep(5)
+    # Refresh setiap 1 detik agar countdown berjalan mulus (realtime detik)
+    time.sleep(1) 
     st.rerun()
 
 # --- 6. LOGIKA BACKGROUND (ADMIN) ---
@@ -197,6 +214,10 @@ if is_admin and auto_loop:
     status_placeholder = st.empty()
     countdown_placeholder = st.empty()
     bar = st.progress(0)
+    
+    # [FASE 1] WORKING
+    # Beri tahu sistem bahwa kita sedang bekerja
+    simpan_status_system("WORKING", None)
     
     batch_start = time.time()
     data_proc = baca_db()
@@ -210,14 +231,10 @@ if is_admin and auto_loop:
         code = "ERR"
         lat = 0
         
-        # --- PERBAIKAN: LOOPING RETRY 3 KALI ---
-        # Ini penting agar proxy yang kadang gagal bisa dicoba lagi
         for attempt in range(3):
             try:
-                # Timeout dinaikkan jadi 20 detik
                 r = requests.get(url, headers=HEADERS, proxies=proxies, timeout=20)
                 lat = round(r.elapsed.total_seconds() * 1000)
-                
                 if r.status_code == 200:
                     stat = "AMAN"
                 elif r.status_code == 429:
@@ -225,19 +242,15 @@ if is_admin and auto_loop:
                 else:
                     stat = f"ERR {r.status_code}"
                 code = r.status_code
-                
-                # Jika berhasil, keluar dari loop retry
                 break 
-                
             except requests.exceptions.ProxyError:
                 stat = "PROXY ERROR"
                 code = "PRX"
-                time.sleep(2) # Tunggu 2 detik sebelum coba lagi
+                time.sleep(2)
             except Exception:
                 stat = "DOWN"
                 code = "ERR"
                 time.sleep(1)
-        # ----------------------------------------
         
         data_proc[i]['status'] = stat
         data_proc[i]['code'] = str(code)
@@ -250,14 +263,21 @@ if is_admin and auto_loop:
     bar.empty()
     status_placeholder.success(f"✅ Selesai: {get_wib_str()} WIB")
     
-    durasi = time.time() - batch_start
-    sisa = interval_detik - durasi
+    # [FASE 2] WAITING
+    # Hitung kapan next run akan terjadi
+    durasi_kerja = time.time() - batch_start
+    sisa_waktu = interval_detik - durasi_kerja
     
-    if sisa > 0:
-        for s in range(int(sisa), 0, -1):
+    if sisa_waktu > 0:
+        # Simpan waktu target ke file agar Penonton bisa baca
+        target_timestamp = datetime.utcnow().timestamp() + sisa_waktu
+        simpan_status_system("WAITING", target_timestamp)
+        
+        for s in range(int(sisa_waktu), 0, -1):
             menit = s // 60
             detik = s % 60
-            countdown_placeholder.warning(f"🕒 {get_wib_str()} WIB | ⏳ Next: {menit}m {detik}s")
+            jam_now = get_wib_str()
+            countdown_placeholder.warning(f"🕒 {jam_now} WIB | ⏳ Menunggu: {menit}m {detik}s")
             time.sleep(1)
             
     countdown_placeholder.empty()
