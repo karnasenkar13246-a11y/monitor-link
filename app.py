@@ -8,7 +8,7 @@ import random
 from datetime import datetime, timedelta
 
 # --- 1. KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Monitor Link WIB", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Monitor Link Pro", page_icon="🌐", layout="wide")
 
 # File Penyimpanan
 FILE_DATA = "data_monitoring.json"
@@ -20,12 +20,9 @@ HEADERS = {
 
 # --- 2. FUNGSI DATABASE & WAKTU WIB ---
 def get_wib_now():
-    # Mengambil waktu UTC dan menambah 7 jam (WIB)
-    wib_time = datetime.utcnow() + timedelta(hours=7)
-    return wib_time
+    return datetime.utcnow() + timedelta(hours=7)
 
 def get_wib_str():
-    # Format string jam:menit:detik
     return get_wib_now().strftime("%H:%M:%S")
 
 def init_db():
@@ -51,6 +48,9 @@ query_params = st.query_params
 is_admin = query_params.get("mode") == "admin"
 
 # --- 3. LOGIKA SIDEBAR (ADMIN) ---
+# Variabel Proxy Global (Default Kosong)
+proxies = None 
+
 if is_admin:
     st.sidebar.header("🔧 Panel Admin")
     st.sidebar.success("Mode: ADMIN (Pengecek)")
@@ -58,7 +58,7 @@ if is_admin:
     current_data = init_db()
     current_urls = "\n".join([item.get('url', '') for item in current_data])
     
-    new_urls_text = st.sidebar.text_area("Edit Daftar Link:", value=current_urls, height=200)
+    new_urls_text = st.sidebar.text_area("Edit Daftar Link:", value=current_urls, height=150)
     
     if st.sidebar.button("💾 Simpan Link Baru"):
         url_list = [u.strip() for u in new_urls_text.split('\n') if u.strip()]
@@ -78,59 +78,71 @@ if is_admin:
     
     st.sidebar.divider()
     
-    # Pengaturan Waktu (Default 10 Menit)
-    st.sidebar.subheader("⏱️ Pengaturan Interval")
+    # --- FITUR BARU: PROXY SETTING ---
+    st.sidebar.subheader("🌍 Pengaturan Proxy (Opsional)")
+    st.sidebar.info("Gunakan ini jika ingin mengecek link yang diblokir di lokasi server tapi aktif di luar negeri.")
+    
+    # Input Proxy
+    proxy_input = st.sidebar.text_input("Masukkan Proxy (http://ip:port):", placeholder="Contoh: http://103.10.10.1:8080")
+    
+    # Simpan Proxy ke logic (Sementara)
+    if proxy_input:
+        proxies = {
+            "http": proxy_input,
+            "https": proxy_input
+        }
+        st.sidebar.warning(f"⚠️ Menggunakan Proxy: {proxy_input}")
+    
+    st.sidebar.divider()
+    
+    # Pengaturan Loop
+    st.sidebar.subheader("⏱️ Kontrol Pengecekan")
     interval_menit = st.sidebar.number_input("Jeda Pengecekan (Menit):", min_value=1, value=10)
     interval_detik = interval_menit * 60
     
     auto_loop = st.sidebar.checkbox("🔄 JALANKAN PENGECEKAN", value=False)
-    
-    # Menampilkan Jam Server saat ini (WIB)
-    st.sidebar.markdown("---")
     st.sidebar.caption(f"🕒 Jam Server: {get_wib_str()} WIB")
 
-# --- 4. TAMPILAN UTAMA (TABS MENU) ---
-st.title("⚡ Dashboard Monitoring Real-Time (WIB)")
+# --- 4. TAMPILAN UTAMA ---
+st.title("🌐 Dashboard Monitoring Link Pro")
 
-# Load Data
 data_display = baca_db()
 df = pd.DataFrame(data_display)
 if 'status' not in df.columns: df['status'] = "PENDING"
 
-# --- MEMBUAT MENU TABS ---
-tab1, tab2, tab3 = st.tabs(["📊 Monitoring Live", "📈 Statistik", "ℹ️ Panduan Status"])
+tab1, tab2, tab3 = st.tabs(["📊 Monitoring Live", "📈 Statistik", "ℹ️ Panduan"])
 
-# === TAB 1: TABEL MONITORING ===
+# === TAB 1: TABEL ===
 with tab1:
     if not data_display:
         st.warning("Data kosong.")
     else:
-        # Metrik
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total Link", len(df))
         c2.metric("Online (AMAN)", len(df[df['status'] == 'AMAN']))
-        c3.metric("Kendala / Blokir", len(df[df['status'] != 'AMAN']), delta_color="inverse")
+        c3.metric("Kendala", len(df[df['status'] != 'AMAN']), delta_color="inverse")
         
         if is_admin:
             c4.info("👨‍💻 ADMIN MODE")
+            if proxies:
+                st.caption(f"Running via Proxy")
         else:
             c4.success("👀 VIEW MODE")
-            c4.caption(f"Update Terakhir: {get_wib_str()} WIB")
+            c4.caption(f"Update: {get_wib_str()} WIB")
 
-        # Styling Tabel
         def warnai_row(val):
             s = str(val)
-            if s == 'AMAN': return 'color: #4CAF50; font-weight: bold' # Hijau
+            if s == 'AMAN': return 'color: #4CAF50; font-weight: bold'
             if 'PENDING' in s: return 'color: gray'
-            return 'color: #FF0000; font-weight: bold' # Merah
+            return 'color: #FF0000; font-weight: bold'
 
         st.dataframe(
             df.style.map(warnai_row, subset=['status']),
             use_container_width=True,
             column_config={
                 "url": "Link Website",
-                "status": "Status Terkini",
-                "code": "Kode Respon",
+                "status": "Status",
+                "code": "Kode",
                 "latency": "Latency (ms)",
                 "last_check": "Waktu Cek (WIB)"
             },
@@ -139,32 +151,30 @@ with tab1:
 
 # === TAB 2: STATISTIK ===
 with tab2:
-    st.subheader("Analisis Kondisi Link")
     if not df.empty:
         col_chart1, col_chart2 = st.columns(2)
         with col_chart1:
-            status_counts = df['status'].value_counts()
-            st.bar_chart(status_counts)
+            st.bar_chart(df['status'].value_counts())
         with col_chart2:
-            st.write("Rincian Status:")
-            st.dataframe(status_counts, use_container_width=True)
-    else:
-        st.info("Belum ada data.")
+            st.dataframe(df['status'].value_counts(), use_container_width=True)
 
 # === TAB 3: PANDUAN ===
 with tab3:
-    st.subheader("Keterangan Status & Warna")
     st.markdown("""
-    | Status | Warna | Arti |
-    | :--- | :--- | :--- |
-    | **AMAN** | 🟢 **HIJAU** | Website dapat diakses normal (Kode 200). |
-    | **CEK BY BK / NAWALA** | 🔴 **MERAH** | Terindikasi blokir (429/403) atau internet positif. |
-    | **ERR / DOWN** | 🔴 **MERAH** | Error server atau mati total. |
+    **Cara Menggunakan Proxy:**
+    1. Cari proxy gratis/berbayar (Format: `http://ip_address:port`).
+    2. Masukkan di menu Admin sidebar.
+    3. Script akan mencoba mengakses website MELALUI proxy tersebut.
+    
+    **Status:**
+    *   🟢 **AMAN**: Website aktif.
+    *   🔴 **CEK BY BK / NAWALA**: Terindikasi blokir.
+    *   🔴 **PROXY ERROR**: Proxy mati/lambat (Ganti proxy lain).
     """)
 
 # --- 5. LOGIKA REFRESH VIEWER ---
 if not is_admin:
-    time.sleep(5) # Refresh otomatis untuk penonton
+    time.sleep(5)
     st.rerun()
 
 # --- 6. LOGIKA BACKGROUND PROCESS (ADMIN ONLY) ---
@@ -173,19 +183,18 @@ if is_admin and auto_loop:
     countdown_placeholder = st.empty()
     bar = st.progress(0)
     
-    # Catat waktu mulai (untuk perhitungan 10 menit)
     batch_start_time = time.time()
-    
     data_proc = baca_db()
     total = len(data_proc)
     
-    # --- LOOP PENGECEKAN LINK ---
     for i, item in enumerate(data_proc):
         url = item['url']
-        status_placeholder.info(f"🔍 [Proses {i+1}/{total}] Mengecek: {url}...")
+        status_placeholder.info(f"🔍 [{i+1}/{total}] Mengecek: {url}...")
         
         try:
-            r = requests.get(url, headers=HEADERS, timeout=5)
+            # --- UPDATE: REQUEST DENGAN PROXY ---
+            # Timeout diperpanjang jadi 10 detik karena Proxy biasanya lambat
+            r = requests.get(url, headers=HEADERS, proxies=proxies, timeout=10)
             lat = round(r.elapsed.total_seconds() * 1000)
             
             if r.status_code == 200:
@@ -195,42 +204,42 @@ if is_admin and auto_loop:
             else:
                 stat = f"ERR {r.status_code}"
             code = r.status_code
+            
+        except requests.exceptions.ProxyError:
+            stat = "PROXY ERROR"
+            code = "ERR"
+            lat = 0
+        except requests.exceptions.ConnectTimeout:
+            stat = "TIMEOUT (LAMBAT)"
+            code = "TO"
+            lat = 0
         except:
             stat = "DOWN"
             code = "ERR"
             lat = 0
             
-        # Update Data dengan Waktu WIB
         data_proc[i]['status'] = stat
         data_proc[i]['code'] = str(code)
         data_proc[i]['latency'] = lat
-        data_proc[i]['last_check'] = get_wib_str() # Pakai Jam WIB
+        data_proc[i]['last_check'] = get_wib_str()
         
         simpan_db(data_proc)
-        
-        # Jeda "sopan" 1 detik
         time.sleep(1) 
         bar.progress((i + 1) / total)
         
     bar.empty()
-    status_placeholder.success(f"✅ Pengecekan selesai pada pukul {get_wib_str()} WIB.")
+    status_placeholder.success(f"✅ Selesai pukul {get_wib_str()} WIB.")
     
-    # --- LOGIKA TUNGGU SISA WAKTU (INTERVAL 10 MENIT) ---
     durasi_kerja = time.time() - batch_start_time
     sisa_waktu = interval_detik - durasi_kerja
     
     if sisa_waktu > 0:
-        # Loop countdown sampai sisa waktu habis
         for s in range(int(sisa_waktu), 0, -1):
             menit = s // 60
             detik = s % 60
-            
-            # Tampilkan jam WIB yang berjalan + Countdown
             jam_sekarang = get_wib_str()
-            countdown_placeholder.warning(
-                f"🕒 Jam: {jam_sekarang} WIB | ⏳ Menunggu pengecekan berikutnya: {menit}m {detik}s lagi..."
-            )
+            countdown_placeholder.warning(f"🕒 {jam_sekarang} WIB | ⏳ Menunggu: {menit}m {detik}s...")
             time.sleep(1)
             
     countdown_placeholder.empty()
-    st.rerun() # Ulangi proses
+    st.rerun()
