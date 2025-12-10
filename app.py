@@ -142,9 +142,9 @@ if is_admin and auto_loop:
             lat = round((time.time() - start) * 1000)
             
             if r.status_code == 200:
-                stat = "UP"
+                stat = "AMAN"
             elif r.status_code == 429:
-                stat = "BUSY (429)"
+                stat = "CEK BY BK / NAWALA"
             else:
                 stat = f"ERR {r.status_code}"
             code = r.status_code
@@ -170,4 +170,5 @@ if is_admin and auto_loop:
     bar.empty()
     status_placeholder.success("Siklus selesai. Mengulang...")
     time.sleep(1)
+
     st.rerun()
